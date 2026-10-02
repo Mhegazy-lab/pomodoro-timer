@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="application-name" content="Pomodoro Timer">
+<meta name="description" content="Classic 25/5 Pomodoro focus timer with chimes.">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Pomodoro Timer</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{background:#0E0A0A;color:#F3F4F6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+display:flex;align-items:center;justify-content:center;min-height:100dvh;
+-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.app{width:min(480px,100vw - 24px);height:100dvh;max-height:780px;display:flex;flex-direction:column;
+padding:16px 14px 12px;gap:12px}
+header{text-align:center}
+header h1{font-size:22px;font-weight:700;letter-spacing:.5px;color:#EF4444}
+.phase{align-self:center;font-size:15px;font-weight:800;letter-spacing:3px;padding:8px 26px;
+border-radius:999px;text-transform:uppercase}
+.phase.focus{color:#EF4444;border:2px solid #EF4444;background:#1F0E0E}
+.phase.break{color:#34D399;border:2px solid #34D399;background:#0C1712}
+.timer{flex:1;display:flex;align-items:center;justify-content:center;
+background:#120C0C;border:1px solid #2E1616;border-radius:20px}
+.timer .time{font-size:96px;font-weight:800;letter-spacing:2px;font-variant-numeric:tabular-nums;line-height:1}
+.timer .time.focus{color:#EF4444}
+.timer .time.break{color:#34D399}
+.counter{text-align:center;font-size:22px;font-weight:700;color:#F3F4F6}
+.counter .lbl{font-size:12px;color:#9CA3AF;text-transform:uppercase;letter-spacing:1px;display:block}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{min-height:56px;border:none;border-radius:14px;font-size:20px;font-weight:800;cursor:pointer;
+font-family:inherit;color:#2B0A0A;background:#EF4444}
+button:active{transform:scale(.97)}
+button.secondary{background:#231114;color:#FCA5A5}
+button:disabled{background:#374151;color:#9CA3AF;cursor:default;transform:none}
+[data-focusable]:focus{outline:none}
+[data-focusable]:focus-visible{outline:3px solid #EF4444;outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header><h1>Pomodoro Timer</h1></header>
+
+  <div class="phase focus" id="phaseLabel">Focus</div>
+
+  <div class="timer"><div class="time focus" id="timeEl">25:00</div></div>
+
+  <div class="counter">
+    <span class="lbl">Completed focus sessions</span>
+    <span id="tomatoCount">🍅×0</span>
+  </div>
+
+  <div class="controls">
+    <button id="startPause" data-focusable>Start</button>
+    <button id="resetBtn" class="secondary" data-focusable>Reset</button>
+  </div>
+</div>
+<script>
+(function(){
+"use strict";
+var FOCUS_LEN=25*60, BREAK_LEN=5*60;
+var COUNT_KEY="pomodoro-count-v1";
+
+var phase="focus";      /* "focus" | "break" */
+var remaining=FOCUS_LEN;
+var running=false;
+var endAt=0;
+var sessions=0;
+var timerId=null;
+
+var phaseLabel=document.getElementById("phaseLabel");
+var timeEl=document.getElementById("timeEl");
+var startPause=document.getElementById("startPause");
+var resetBtn=document.getElementById("resetBtn");
+var tomatoCount=document.getElementById("tomatoCount");
+
+function loadCount(){
+  try{
+    var v=parseInt(localStorage.getItem(COUNT_KEY),10);
+    sessions=isNaN(v)||v<0?0:v;
+  }catch(e){sessions=0;}
+}
+function saveCount(){
+  try{localStorage.setItem(COUNT_KEY,String(sessions));}catch(e){}
+}
+
+function fmt(sec){
+  sec=Math.max(0,Math.round(sec));
+  var m=Math.floor(sec/60), s=sec%60;
+  return m+":"+(s<10?"0":"")+s;
+}
+
+function beep(){
+  try{
+    var Ctx=window.AudioContext||window.webkitAudioContext;
+    if(!Ctx){return;}
+    var ctx=new Ctx();
+    var t=ctx.currentTime;
+    for(var i=0;i<3;i++){
+      var o=ctx.createOscillator();
+      var g=ctx.createGain();
+      o.type="sine"; o.frequency.value=880;
+      var start=t+i*0.32;
+      g.gain.setValueAtTime(0.0001,start);
+      g.gain.exponentialRampToValueAtTime(0.5,start+0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001,start+0.28);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(start); o.stop(start+0.3);
+    }
+    setTimeout(function(){try{ctx.close();}catch(e){}},1200);
+  }catch(e){}
+}
+
+function render(){
+  timeEl.textContent=fmt(remaining);
+  phaseLabel.textContent=phase==="focus"?"Focus":"Break";
+  phaseLabel.className="phase "+phase;
+  timeEl.className="time "+phase;
+  startPause.textContent=running?"Pause":"Start";
+  tomatoCount.textContent="🍅×"+sessions;
+}
+
+function switchPhase(){
+  beep();
+  if(phase==="focus"){
+    sessions++;
+    saveCount();
+    phase="break";
+    remaining=BREAK_LEN;
+  }else{
+    phase="focus";
+    remaining=FOCUS_LEN;
+  }
+  endAt=Date.now()+remaining*1000; /* auto-continue into next phase */
+  render();
+}
+
+function tick(){
+  if(!running){return;}
+  var left=Math.ceil((endAt-Date.now())/1000);
+  if(left<=0){
+    switchPhase();
+  }else{
+    remaining=left;
+    render();
+  }
+}
+
+function start(){
+  running=true;
+  endAt=Date.now()+remaining*1000;
+  timerId=setInterval(tick,250);
+  render();
+}
+function pause(){
+  running=false;
+  if(timerId){clearInterval(timerId);timerId=null;}
+  render();
+}
+
+startPause.addEventListener("click",function(){
+  if(running){pause();}else{start();}
+});
+resetBtn.addEventListener("click",function(){
+  pause();
+  phase="focus";
+  remaining=FOCUS_LEN;
+  render();
+});
+
+/* D-pad: arrows move between controls, Enter activates */
+function focusables(){
+  return Array.prototype.slice.call(document.querySelectorAll("[data-focusable]"))
+    .filter(function(el){return !el.disabled && el.offsetParent!==null;});
+}
+document.addEventListener("keydown",function(e){
+  if(e.key==="Enter"){
+    e.preventDefault();
+    var active=document.activeElement;
+    if(active&&active.getAttribute("data-focusable")!==null){active.click();}
+    return;
+  }
+  var fwd=(e.key==="ArrowRight"||e.key==="ArrowDown");
+  var back=(e.key==="ArrowLeft"||e.key==="ArrowUp");
+  if(!fwd&&!back){return;}
+  e.preventDefault();
+  var items=focusables();
+  if(!items.length){return;}
+  var i=items.indexOf(document.activeElement);
+  if(i===-1){items[0].focus();return;}
+  i=(i+(fwd?1:-1)+items.length)%items.length;
+  items[i].focus();
+});
+
+loadCount();
+render();
+startPause.focus();
+})();
+</script>
+</body>
+</html>
